@@ -1,16 +1,19 @@
-# Node rules:
-## Grunt intermediate storage (http://gruntjs.com/creating-plugins#storing-task-files)
-.grunt
-
-## Dependency directory
-## Commenting this out is preferred by some people, see
-## https://docs.npmjs.com/misc/faq#should-i-check-my-node_modules-folder-into-git
-node_modules
-
-# Book build output
-_book
-
-# eBook build output
-*.epub
-*.mobi
-*.pdf
+# --- SEGURIDAD (Archivos con tus llaves privadas) ---                                                                                                                                  
+    2 credentials.json                                                                                                                                                                        
+    3 token.json                                                                                                                                                                              
+    4 .env                                                                                                                                                                                    
+    5                                                                                                                                                                                         
+    6 # --- PYTHON (Archivos temporales del sistema) ---                                                                                                                                      
+    7 __pycache__/                                                                                                                                                                            
+    8 *.py[cod]                                                                                                                                                                               
+    9 *$py.class                                                                                                                                                                              
+   10 .venv/                                                                                                                                                                                  
+   11 venv/                                                                                                                                                                                   
+   12 ENV/                                                                                                                                                                                    
+   13                                                                                                                                                                                         
+   14 # --- DISTRIBUCIÓN ---                                                                                                                                                                  
+   15 dist/                                                                                                                                                                                   
+   16 build/                                                                                                                                                                                  
+   17 *.egg-info/                                                                                                                                                                             
+   18                                                                                                                                                                                         
+   19 # --- OTROS ---   
