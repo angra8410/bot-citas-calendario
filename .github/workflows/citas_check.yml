@@ -1,0 +1,30 @@
+name: Check Citas Gmail
+
+on:
+  schedule:
+    # Se ejecuta todos los días a la medianoche (00:00 UTC)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Permite ejecutarlo manualmente desde la pestaña Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependencias
+        run: |
+          pip install google-api-python-client google-auth-oauthlib google-generativeai
+
+      - name: Ejecutar script de automatización
+        env:
+          GOOGLE_USER_CREDS: ${{ secrets.GOOGLE_USER_CREDS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python bot_citas.py
