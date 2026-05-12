@@ -2,6 +2,7 @@ import os
 import datetime
 import json
 import base64
+import time
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 from google import genai
@@ -15,12 +16,11 @@ def extract_appointment_data(text, api_key):
         print("GEMINI_API_KEY no proporcionada.")
         return None
 
-    # Lista de configuraciones basada en el diagnóstico real del usuario
+    # Priorizamos 2.5-flash que es el que funcionó en el log anterior
     configs = [
+        {'model': 'gemini-2.5-flash', 'version': 'v1'},
         {'model': 'gemini-2.0-flash', 'version': 'v1'},
         {'model': 'gemini-flash-latest', 'version': 'v1'},
-        {'model': 'gemini-2.5-flash', 'version': 'v1'},
-        {'model': 'gemini-2.0-flash-lite', 'version': 'v1'},
     ]
 
     prompt = f"""
@@ -58,11 +58,38 @@ def extract_appointment_data(text, api_key):
             return None
         except Exception as e:
             if "404" in str(e):
-                continue # Probamos la siguiente configuración
+                continue 
+            if "429" in str(e):
+                print(f"DEBUG: Cuota agotada para {config['model']}. Probando siguiente...")
+                continue
             print(f"Error procesando con {config['model']} ({config['version']}): {e}")
             
-    print("Error: No se pudo conectar con ningún modelo de Gemini (todos devolvieron 404).")
     return None
+
+def is_duplicate(calendar, start_time, msg_id):
+    """Checks if an event for this message or at this time already exists."""
+    # Buscamos eventos en una ventana de 2 horas alrededor de la cita
+    time_min = (start_time - datetime.timedelta(hours=1)).isoformat() + 'Z'
+    time_max = (start_time + datetime.timedelta(hours=1)).isoformat() + 'Z'
+    
+    try:
+        events_result = calendar.events().list(calendarId='primary', timeMin=time_min, 
+                                              timeMax=time_max, singleEvents=True).execute()
+        events = events_result.get('items', [])
+        
+        for event in events:
+            # Verificamos si el ID del correo está en la descripción
+            if msg_id in event.get('description', ''):
+                print(f"DEBUG: Duplicado detectado por ID de mensaje {msg_id}")
+                return True
+            # Si ya hay algo a esa misma hora, también lo consideramos duplicado
+            event_start = event['start'].get('dateTime') or event['start'].get('date')
+            if event_start and start_time.isoformat() in event_start:
+                 print(f"DEBUG: Duplicado detectado por hora {start_time}")
+                 return True
+    except Exception as e:
+        print(f"Error verificando duplicados: {e}")
+    return False
 
 def main():
     creds_info = os.environ.get('GOOGLE_USER_CREDS')
@@ -79,21 +106,10 @@ def main():
 
     gemini_api_key = os.environ.get('GEMINI_API_KEY')
     
-    # --- DIAGNÓSTICO INICIAL ---
-    if gemini_api_key:
-        try:
-            print("DEBUG: Diagnosticando modelos disponibles...")
-            client_diag = genai.Client(api_key=gemini_api_key)
-            for m in client_diag.models.list():
-                print(f"DEBUG: Modelo detectado: {m.name}")
-        except Exception as diag_err:
-            print(f"DEBUG: Error en diagnóstico: {diag_err}")
-    # ---------------------------
-
     gmail = build('gmail', 'v1', credentials=creds)
     calendar = build('calendar', 'v3', credentials=creds)
 
-    # Búsqueda extremadamente amplia para no perder nada
+    # Búsqueda amplia
     query = '("cita" OR "citas" OR "Ruta N" OR "webinar" OR "encuentro") newer_than:7d'
     print(f"DEBUG: Buscando correos con query: {query}")
     
@@ -108,6 +124,9 @@ def main():
     for msg_ref in messages:
         msg_id = msg_ref['id']
         try:
+            # Pequeña pausa para no saturar la API de Gemini (Free Tier)
+            time.sleep(2)
+            
             msg = gmail.users().messages().get(userId='me', id=msg_id).execute()
             subject = "Sin Asunto"
             headers = msg.get('payload', {}).get('headers', [])
@@ -120,22 +139,14 @@ def main():
             def get_body(payload):
                 """Recursively extracts the body, prioritizing plain text, then HTML."""
                 parts = payload.get('parts', [])
-                
-                # If it's a simple message without parts
                 if not parts:
                     return payload.get('body', {}).get('data')
-                
-                # Look for plain text first
                 for part in parts:
                     if part.get('mimeType') == 'text/plain':
                         return part.get('body', {}).get('data')
-                
-                # Then look for HTML
                 for part in parts:
                     if part.get('mimeType') == 'text/html':
                         return part.get('body', {}).get('data')
-                
-                # Recursively look in nested parts
                 for part in parts:
                     data = get_body(part)
                     if data:
@@ -145,10 +156,7 @@ def main():
             body_data = get_body(msg.get('payload', {}))
             if body_data:
                 try:
-                    # Usamos decode con error='ignore' por si hay caracteres extraños
                     body = base64.urlsafe_b64decode(body_data).decode('utf-8', errors='ignore')
-                    print(f"DEBUG: Cuerpo extraído ({len(body)} caracteres).")
-                    
                     appointment_data = extract_appointment_data(body, gemini_api_key)
                     
                     if appointment_data:
@@ -189,8 +197,6 @@ def main():
                     print(f"Error decodificando cuerpo: {decode_err}")
             else:
                 print("DEBUG: No se pudo extraer el cuerpo del mensaje.")
-        except Exception as e:
-            print(f"Error con mensaje {msg_id}: {e}")
         except Exception as e:
             print(f"Error con mensaje {msg_id}: {e}")
 
