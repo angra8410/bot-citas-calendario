@@ -10,48 +10,59 @@ from google import genai
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/calendar']
 
 def extract_appointment_data(text, api_key):
-    """Uses the new Google GenAI SDK to extract structured date and time."""
+    """Uses the new Google GenAI SDK with multiple fallbacks for model and API version."""
     if not api_key:
         print("GEMINI_API_KEY no proporcionada.")
         return None
 
-    try:
-        # Forzamos la versión v1 de la API ya que v1beta parece estar fallando con 404
-        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1'})
-        
-        prompt = f"""
-        Analiza el siguiente texto de un correo y extrae la fecha y hora del PRÓXIMO o SIGUIENTE evento (cita, webinar, reunión, encuentro).
-        
-        IMPORTANTE: 
-        1. Ignora fechas pasadas (como menciones de webinars que ya ocurrieron). 
-        2. Busca frases como "Nuestra cita es", "próximo encuentro", "Fecha:", "Mayo 13 de 2026".
-        3. Responde ÚNICAMENTE con un objeto JSON con las llaves "fecha" (YYYY-MM-DD) y "hora" (HH:MM en formato 24h).
-        4. Si hay un rango de horas (ej. 6:00 pm a 7:00 pm), usa la hora de inicio (18:00).
-        5. Si el texto no menciona ninguna cita futura clara, responde únicamente con {{}}.
-        
-        Hoy es {datetime.date.today().isoformat()}.
-        
-        Texto del correo:
-        "{text[:5000]}"
-        """
-        
-        response = client.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=prompt
-        )
-        
-        text_response = response.text.strip()
-        print(f"DEBUG: Respuesta de Gemini: {text_response}")
-        
-        if "{" in text_response:
-            json_str = text_response[text_response.find("{"):text_response.rfind("}")+1]
-            data = json.loads(json_str)
-            if data and 'fecha' in data and 'hora' in data:
-                return data
-        return None
-    except Exception as e:
-        print(f"Error procesando con Gemini: {e}")
-        return None
+    # Lista de configuraciones a probar para evitar el error 404
+    configs = [
+        {'model': 'gemini-1.5-flash', 'version': 'v1'},
+        {'model': 'gemini-1.5-flash-latest', 'version': 'v1'},
+        {'model': 'gemini-1.5-flash', 'version': 'v1beta'},
+        {'model': 'gemini-1.5-pro', 'version': 'v1'},
+    ]
+
+    prompt = f"""
+    Analiza el siguiente texto de un correo y extrae la fecha y hora del PRÓXIMO o SIGUIENTE evento (cita, webinar, reunión, encuentro).
+    
+    IMPORTANTE: 
+    1. Ignora fechas pasadas (como menciones de webinars que ya ocurrieron). 
+    2. Busca frases como "Nuestra cita es", "próximo encuentro", "Fecha:", "Mayo 13 de 2026".
+    3. Responde ÚNICAMENTE con un objeto JSON con las llaves "fecha" (YYYY-MM-DD) y "hora" (HH:MM en formato 24h).
+    4. Si hay un rango de horas (ej. 6:00 pm a 7:00 pm), usa la hora de inicio (18:00).
+    5. Si el texto no menciona ninguna cita futura clara, responde únicamente con {{}}.
+    
+    Hoy es {datetime.date.today().isoformat()}.
+    
+    Texto del correo:
+    "{text[:5000]}"
+    """
+
+    for config in configs:
+        try:
+            client = genai.Client(api_key=api_key, http_options={'api_version': config['version']})
+            response = client.models.generate_content(
+                model=config['model'],
+                contents=prompt
+            )
+            
+            text_response = response.text.strip()
+            print(f"DEBUG: Éxito con {config['model']} ({config['version']})")
+            
+            if "{" in text_response:
+                json_str = text_response[text_response.find("{"):text_response.rfind("}")+1]
+                data = json.loads(json_str)
+                if data and 'fecha' in data and 'hora' in data:
+                    return data
+            return None
+        except Exception as e:
+            if "404" in str(e):
+                continue # Probamos la siguiente configuración
+            print(f"Error procesando con {config['model']} ({config['version']}): {e}")
+            
+    print("Error: No se pudo conectar con ningún modelo de Gemini (todos devolvieron 404).")
+    return None
 
 def main():
     creds_info = os.environ.get('GOOGLE_USER_CREDS')
@@ -68,6 +79,17 @@ def main():
 
     gemini_api_key = os.environ.get('GEMINI_API_KEY')
     
+    # --- DIAGNÓSTICO INICIAL ---
+    if gemini_api_key:
+        try:
+            print("DEBUG: Diagnosticando modelos disponibles...")
+            client_diag = genai.Client(api_key=gemini_api_key)
+            for m in client_diag.models.list():
+                print(f"DEBUG: Modelo detectado: {m.name}")
+        except Exception as diag_err:
+            print(f"DEBUG: Error en diagnóstico: {diag_err}")
+    # ---------------------------
+
     gmail = build('gmail', 'v1', credentials=creds)
     calendar = build('calendar', 'v3', credentials=creds)
 
