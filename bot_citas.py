@@ -34,6 +34,7 @@ def extract_appointment_data(text, api_key):
         "{text[:5000]}"
         """
         
+        # Intentamos con el nombre de modelo más estándar para el nuevo SDK
         response = client.models.generate_content(
             model='gemini-1.5-flash',
             contents=prompt
