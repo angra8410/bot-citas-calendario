@@ -19,10 +19,13 @@ def extract_appointment_data(text, api_key):
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    Extrae la fecha y hora de la siguiente solicitud de cita. 
+    Analiza el siguiente texto y determina si es una solicitud de cita (médica, dental, etc.). 
+    Si ES una solicitud de cita, extrae la fecha y hora. 
     Responde ÚNICAMENTE con un objeto JSON que tenga las llaves "fecha" (formato YYYY-MM-DD) y "hora" (formato HH:MM).
     Si no hay hora especificada, asume las 09:00.
     Si la fecha es relativa (ej. "mañana", "el próximo martes"), calcúlala basándote en que hoy es {datetime.date.today().isoformat()}.
+    
+    Si NO es una solicitud de cita clara, responde únicamente con {{}}.
     
     Texto: "{text}"
     """
@@ -31,7 +34,7 @@ def extract_appointment_data(text, api_key):
         response = model.generate_content(prompt)
         clean_response = response.text.strip().replace('```json', '').replace('```', '')
         data = json.loads(clean_response)
-        return data
+        return data if data else None
     except Exception as e:
         print(f"Error procesando con Gemini: {e}")
         return None
@@ -71,7 +74,7 @@ def main():
     calendar = build('calendar', 'v3', credentials=creds)
 
     # Buscar correos de "Cita" de las últimas 24h
-    query = 'subject:("cita" OR "solicitud de cita")'
+    query = '(cita OR citas) newer_than:1d'
     
     try:
         results = gmail.users().messages().list(userId='me', q=query).execute()
