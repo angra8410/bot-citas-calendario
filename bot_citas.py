@@ -19,26 +19,32 @@ def extract_appointment_data(text, api_key):
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    Analiza el siguiente texto y determina si contiene una cita (médica, dental, reunión, etc.), ya sea una solicitud, confirmación, recordatorio o asignación.
+    Analiza el siguiente texto y determina si contiene una cita, webinar, reunión o encuentro programado.
+    
+    Presta especial atención a frases como "Nuestra cita es", "La cita es el", "Fecha:", "Mayo 13 de 2026".
     
     Si contiene información de una cita, extrae la fecha y hora. 
     Responde ÚNICAMENTE con un objeto JSON que tenga las llaves "fecha" (formato YYYY-MM-DD) y "hora" (formato HH:MM).
     Si no hay hora especificada, asume las 09:00.
-    Si la fecha es relativa (ej. "mañana", "el próximo martes"), calcúlala basándote en que hoy es {datetime.date.today().isoformat()}.
+    Si la fecha es relativa (ej. "mañana"), calcúlala basándote en que hoy es {datetime.date.today().isoformat()}.
     
     Si el texto NO menciona ninguna cita clara, responde únicamente con {{}}.
     
-    Texto: "{text}"
+    Texto: "{text[:4000]}" # Limitamos para no exceder tokens
     """
     
     try:
         response = model.generate_content(prompt)
-        clean_response = response.text.strip().replace('```json', '').replace('```', '')
-        # Intentamos limpiar cualquier texto extra que Gemini pueda haber incluido
-        if "{" in clean_response:
-            clean_response = clean_response[clean_response.find("{"):clean_response.rfind("}")+1]
-        data = json.loads(clean_response)
-        return data if data and 'fecha' in data else None
+        text_response = response.text.strip()
+        print(f"DEBUG: Respuesta de Gemini: {text_response}")
+        
+        # Limpieza robusta del JSON
+        if "{" in text_response:
+            json_str = text_response[text_response.find("{"):text_response.rfind("}")+1]
+            data = json.loads(json_str)
+            if data and 'fecha' in data:
+                return data
+        return None
     except Exception as e:
         print(f"Error procesando con Gemini: {e}")
         return None
@@ -56,7 +62,12 @@ def is_duplicate(calendar, start_time, msg_id):
     for event in events:
         # Verificamos si el ID del correo está en la descripción
         if msg_id in event.get('description', ''):
+            print(f"DEBUG: Duplicado detectado por ID de mensaje {msg_id}")
             return True
+        # Si ya hay algo a esa misma hora, también lo consideramos duplicado para evitar traslapes
+        if event['start'].get('dateTime') == start_time.isoformat() + 'Z':
+             print(f"DEBUG: Duplicado detectado por hora {start_time}")
+             return True
     return False
 
 def main():
@@ -77,12 +88,14 @@ def main():
     gmail = build('gmail', 'v1', credentials=creds)
     calendar = build('calendar', 'v3', credentials=creds)
 
-    # Buscar correos de "Cita" de los últimos 7 días para asegurar que no se pierda nada
-    query = '(cita OR citas OR appointment OR reunión OR "Nuestra cita") newer_than:7d'
+    # Buscamos de forma muy amplia: palabra cita o remitente Ruta N, en los últimos 7 días
+    query = '("cita" OR "citas" OR "Ruta N" OR "webinar") newer_than:7d'
+    print(f"DEBUG: Ejecutando búsqueda en Gmail con query: {query}")
     
     try:
         results = gmail.users().messages().list(userId='me', q=query).execute()
         messages = results.get('messages', [])
+        print(f"DEBUG: Encontrados {len(messages)} mensajes potenciales.")
     except Exception as e:
         print(f"Error al listar mensajes de Gmail: {e}")
         return
@@ -91,23 +104,29 @@ def main():
         msg_id = msg_ref['id']
         try:
             msg = gmail.users().messages().get(userId='me', id=msg_id).execute()
+            subject = "Sin Asunto"
+            for header in msg.get('payload', {}).get('headers', []):
+                if header['name'] == 'Subject':
+                    subject = header['value']
+            
+            print(f"\nDEBUG: Procesando mensaje ID: {msg_id} | Asunto: {subject}")
+            
             payload = msg.get('payload', {})
             
             def get_body(payload):
                 """Extracts the body of the email, prioritizing plain text."""
+                mime_type = payload.get('mimeType')
                 parts = payload.get('parts', [])
-                body = ""
                 
-                # If no parts, body might be in the payload itself
                 if not parts:
                     return payload.get('body', {}).get('data')
                 
-                # Priority: text/plain
+                # Prioridad 1: buscar texto plano en las partes inmediatas
                 for part in parts:
                     if part.get('mimeType') == 'text/plain':
                         return part.get('body', {}).get('data')
                 
-                # Fallback: search recursively in parts
+                # Prioridad 2: buscar recursivamente
                 for part in parts:
                     data = get_body(part)
                     if data:
@@ -117,35 +136,41 @@ def main():
             body_data = get_body(payload)
             if body_data:
                 body = base64.urlsafe_b64decode(body_data).decode('utf-8')
+                print(f"DEBUG: Cuerpo extraído ({len(body)} caracteres). Enviando a Gemini...")
                 appointment_data = extract_appointment_data(body, gemini_api_key)
                 
                 if appointment_data:
                     fecha = appointment_data.get('fecha')
                     hora = appointment_data.get('hora')
+                    print(f"DEBUG: Gemini detectó cita para {fecha} a las {hora}")
                     fecha_cita = datetime.datetime.strptime(f"{fecha} {hora}", "%Y-%m-%d %H:%M")
                     
                     # PREVENCIÓN DE DUPLICADOS
                     if is_duplicate(calendar, fecha_cita, msg_id):
-                        print(f"Cita ya programada para el correo {msg_id}. Omitiendo...")
+                        print(f"Omitiendo: Cita ya programada para {msg_id} o a esa misma hora.")
                         continue
 
                     event = {
-                        'summary': f'Cita Médica: {msg["snippet"][:50]}',
-                        'description': f'Correo ID: {msg_id}\n\nTexto original: {msg["snippet"]}',
+                        'summary': f'Cita/Webinar: {subject[:50]}',
+                        'description': f'Correo ID: {msg_id}\n\nResumen: {msg["snippet"]}',
                         'start': {'dateTime': fecha_cita.isoformat() + 'Z'},
                         'end': {'dateTime': (fecha_cita + datetime.timedelta(hours=1)).isoformat() + 'Z'},
                         'reminders': {
                             'useDefault': False,
                             'overrides': [
-                                {'method': 'email', 'minutes': 24 * 60}, # 24 horas antes
-                                {'method': 'email', 'minutes': 60},      # 1 hora antes
-                                {'method': 'popup', 'minutes': 30},      # 30 minutos antes (notificación móvil/web)
+                                {'method': 'email', 'minutes': 24 * 60},
+                                {'method': 'email', 'minutes': 60},
+                                {'method': 'popup', 'minutes': 30},
                             ],
                         },
                     }
                     
                     calendar.events().insert(calendarId='primary', body=event).execute()
-                    print(f"Nueva cita agendada: {fecha} {hora}")
+                    print(f"✅ EXITO: Nueva cita agendada: {fecha} {hora}")
+                else:
+                    print("DEBUG: Gemini no encontró una cita válida en este correo.")
+        except Exception as e:
+            print(f"Error con mensaje {msg_id}: {e}")
         except Exception as e:
             print(f"Error con mensaje {msg_id}: {e}")
 
