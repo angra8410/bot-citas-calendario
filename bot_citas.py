@@ -15,12 +15,12 @@ def extract_appointment_data(text, api_key):
         print("GEMINI_API_KEY no proporcionada.")
         return None
 
-    # Lista de configuraciones a probar para evitar el error 404
+    # Lista de configuraciones basada en el diagnóstico real del usuario
     configs = [
-        {'model': 'gemini-1.5-flash', 'version': 'v1'},
-        {'model': 'gemini-1.5-flash-latest', 'version': 'v1'},
-        {'model': 'gemini-1.5-flash', 'version': 'v1beta'},
-        {'model': 'gemini-1.5-pro', 'version': 'v1'},
+        {'model': 'gemini-2.0-flash', 'version': 'v1'},
+        {'model': 'gemini-flash-latest', 'version': 'v1'},
+        {'model': 'gemini-2.5-flash', 'version': 'v1'},
+        {'model': 'gemini-2.0-flash-lite', 'version': 'v1'},
     ]
 
     prompt = f"""
