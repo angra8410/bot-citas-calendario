@@ -19,13 +19,14 @@ def extract_appointment_data(text, api_key):
     model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
-    Analiza el siguiente texto y determina si es una solicitud de cita (médica, dental, etc.). 
-    Si ES una solicitud de cita, extrae la fecha y hora. 
+    Analiza el siguiente texto y determina si contiene una cita (médica, dental, reunión, etc.), ya sea una solicitud, confirmación, recordatorio o asignación.
+    
+    Si contiene información de una cita, extrae la fecha y hora. 
     Responde ÚNICAMENTE con un objeto JSON que tenga las llaves "fecha" (formato YYYY-MM-DD) y "hora" (formato HH:MM).
     Si no hay hora especificada, asume las 09:00.
     Si la fecha es relativa (ej. "mañana", "el próximo martes"), calcúlala basándote en que hoy es {datetime.date.today().isoformat()}.
     
-    Si NO es una solicitud de cita clara, responde únicamente con {{}}.
+    Si el texto NO menciona ninguna cita clara, responde únicamente con {{}}.
     
     Texto: "{text}"
     """
@@ -33,8 +34,11 @@ def extract_appointment_data(text, api_key):
     try:
         response = model.generate_content(prompt)
         clean_response = response.text.strip().replace('```json', '').replace('```', '')
+        # Intentamos limpiar cualquier texto extra que Gemini pueda haber incluido
+        if "{" in clean_response:
+            clean_response = clean_response[clean_response.find("{"):clean_response.rfind("}")+1]
         data = json.loads(clean_response)
-        return data if data else None
+        return data if data and 'fecha' in data else None
     except Exception as e:
         print(f"Error procesando con Gemini: {e}")
         return None
@@ -90,13 +94,24 @@ def main():
             payload = msg.get('payload', {})
             
             def get_body(payload):
-                if 'body' in payload and payload['body'].get('data'):
-                    return payload['body']['data']
-                if 'parts' in payload:
-                    for part in payload['parts']:
-                        data = get_body(part)
-                        if data:
-                            return data
+                """Extracts the body of the email, prioritizing plain text."""
+                parts = payload.get('parts', [])
+                body = ""
+                
+                # If no parts, body might be in the payload itself
+                if not parts:
+                    return payload.get('body', {}).get('data')
+                
+                # Priority: text/plain
+                for part in parts:
+                    if part.get('mimeType') == 'text/plain':
+                        return part.get('body', {}).get('data')
+                
+                # Fallback: search recursively in parts
+                for part in parts:
+                    data = get_body(part)
+                    if data:
+                        return data
                 return None
 
             body_data = get_body(payload)
@@ -119,6 +134,14 @@ def main():
                         'description': f'Correo ID: {msg_id}\n\nTexto original: {msg["snippet"]}',
                         'start': {'dateTime': fecha_cita.isoformat() + 'Z'},
                         'end': {'dateTime': (fecha_cita + datetime.timedelta(hours=1)).isoformat() + 'Z'},
+                        'reminders': {
+                            'useDefault': False,
+                            'overrides': [
+                                {'method': 'email', 'minutes': 24 * 60}, # 24 horas antes
+                                {'method': 'email', 'minutes': 60},      # 1 hora antes
+                                {'method': 'popup', 'minutes': 30},      # 30 minutos antes (notificación móvil/web)
+                            ],
+                        },
                     }
                     
                     calendar.events().insert(calendarId='primary', body=event).execute()
