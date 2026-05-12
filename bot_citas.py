@@ -18,6 +18,15 @@ def extract_appointment_data(text, api_key):
     try:
         client = genai.Client(api_key=api_key)
         
+        # --- DIAGNÓSTICO: Listar modelos disponibles ---
+        try:
+            print("DEBUG: Listando modelos disponibles para esta API Key...")
+            for m in client.models.list():
+                print(f"DEBUG: Modelo disponible: {m.name} | Versiones: {m.supported_methods}")
+        except Exception as list_err:
+            print(f"DEBUG: No se pudieron listar los modelos: {list_err}")
+        # -----------------------------------------------
+
         prompt = f"""
         Analiza el siguiente texto de un correo y extrae la fecha y hora del PRÓXIMO o SIGUIENTE evento (cita, webinar, reunión, encuentro).
         
