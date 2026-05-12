@@ -4,36 +4,41 @@ import json
 import base64
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-import google.generativeai as genai
+from google import genai
 
 # Configuración de alcances
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/calendar']
 
 def extract_appointment_data(text, api_key):
-    """Uses Gemini to extract structured date and time from natural language text."""
+    """Uses the new Google GenAI SDK to extract structured date and time."""
     if not api_key:
         print("GEMINI_API_KEY no proporcionada.")
         return None
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    prompt = f"""
-    Analiza el siguiente texto de un correo y extrae la fecha y hora del PRÓXIMO o SIGUIENTE evento (cita, webinar, reunión, encuentro).
-    
-    IMPORTANTE: 
-    1. Ignora fechas pasadas (como menciones de webinars que ya ocurrieron). 
-    2. Busca frases como "Nuestra cita es", "próximo encuentro", "Fecha:", "Mayo 13 de 2026".
-    3. Responde ÚNICAMENTE con un objeto JSON con las llaves "fecha" (YYYY-MM-DD) y "hora" (HH:MM en formato 24h).
-    4. Si hay un rango de horas (ej. 6:00 pm a 7:00 pm), usa la hora de inicio.
-    5. Si el texto no menciona ninguna cita futura clara, responde únicamente con {{}}.
-    
-    Texto del correo:
-    "{text[:5000]}"
-    """
-    
     try:
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        
+        prompt = f"""
+        Analiza el siguiente texto de un correo y extrae la fecha y hora del PRÓXIMO o SIGUIENTE evento (cita, webinar, reunión, encuentro).
+        
+        IMPORTANTE: 
+        1. Ignora fechas pasadas (como menciones de webinars que ya ocurrieron). 
+        2. Busca frases como "Nuestra cita es", "próximo encuentro", "Fecha:", "Mayo 13 de 2026".
+        3. Responde ÚNICAMENTE con un objeto JSON con las llaves "fecha" (YYYY-MM-DD) y "hora" (HH:MM en formato 24h).
+        4. Si hay un rango de horas (ej. 6:00 pm a 7:00 pm), usa la hora de inicio (18:00).
+        5. Si el texto no menciona ninguna cita futura clara, responde únicamente con {{}}.
+        
+        Hoy es {datetime.date.today().isoformat()}.
+        
+        Texto del correo:
+        "{text[:5000]}"
+        """
+        
+        response = client.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
+        
         text_response = response.text.strip()
         print(f"DEBUG: Respuesta de Gemini: {text_response}")
         
