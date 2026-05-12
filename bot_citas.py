@@ -77,8 +77,8 @@ def main():
     gmail = build('gmail', 'v1', credentials=creds)
     calendar = build('calendar', 'v3', credentials=creds)
 
-    # Buscar correos de "Cita" de las últimas 24h
-    query = '(cita OR citas) newer_than:1d'
+    # Buscar correos de "Cita" de los últimos 7 días para asegurar que no se pierda nada
+    query = '(cita OR citas OR appointment OR reunión OR "Nuestra cita") newer_than:7d'
     
     try:
         results = gmail.users().messages().list(userId='me', q=query).execute()
